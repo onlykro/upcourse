@@ -1,9 +1,35 @@
+// app/services/supabase-db.server.js
 import "server-only";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createClient } from "@supabase/supabase-js";
 
 // ─── TABLE NAMES ─────────────────────────────────────────────
 const USERS_TABLE = "users";
 const ADMINS_TABLE = "admins";
+
+/**
+ * Use SERVICE ROLE on the server for admin/student management.
+ * This avoids:
+ * - RLS blocking reads/writes
+ * - cookie adapter issues in Route Handlers (getAll errors)
+ */
+function createSupabaseAdminClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    throw new Error(
+      "Missing Supabase env vars. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+    );
+  }
+
+  return createClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
 
 /* ------------------------------------------------------------------
     1) USERS (STUDENTS)
@@ -11,127 +37,126 @@ const ADMINS_TABLE = "admins";
 
 // GET ALL USERS
 export const getData = async () => {
-    const supabase = await createSupabaseServerClient();
-    const { data, error } = await supabase.from(USERS_TABLE).select("*");
-    if (error) {
-        console.error("Supabase Error (getData):", error);
-        return [];
-    }
-    return data || [];
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase.from(USERS_TABLE).select("*");
+
+  if (error) {
+    console.error("Supabase Error (getData):", error);
+    return [];
+  }
+  return data || [];
 };
 
 // ADD A NEW USER
 export const addStudent = async (student) => {
-    const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
-    if (!student?.email) {
-        return { success: false, error: "email is required" };
-    }
+  if (!student?.email) {
+    return { success: false, error: "email is required" };
+  }
 
-    const newStudent = {
-        ...student,
-        created_at: student.created_at || new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-    };
+  const newStudent = {
+    ...student,
+    created_at: student.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
 
-    const { error } = await supabase.from(USERS_TABLE).insert(newStudent);
-    if (error) {
-        console.error("Error adding student:", error);
-        return { success: false, error: error.message || error };
-    }
+  const { error } = await supabase.from(USERS_TABLE).insert(newStudent);
 
-    return { success: true };
+  if (error) {
+    console.error("Error adding student:", error);
+    return { success: false, error: error.message || String(error) };
+  }
+
+  return { success: true };
 };
 
 // UPDATE A USER (by supabase_id)
 export const updateStudent = async (student) => {
-    const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
-    if (!student?.supabase_id) {
-        return { success: false, error: "supabase_id is required for update" };
-    }
+  if (!student?.supabase_id) {
+    return { success: false, error: "supabase_id is required for update" };
+  }
 
-    const patch = {
-        first_name: student.first_name ?? "",
-        middle_name: student.middle_name ?? "",
-        last_name: student.last_name ?? "",
-        suffix: student.suffix ?? "",
-        birthdate: student.birthdate ?? "",
-        gender: student.gender ?? "",
-        street: student.street ?? "",
-        brgy: student.brgy ?? "",
-        city: student.city ?? "",
-        province: student.province ?? "",
-        username: student.username ?? "",
-        password: student.password ?? "",
-        user_level: student.user_level ?? "",
-        user_status: student.user_status ?? "",
-        program: student.program ?? "",
-        strand: student.strand ?? "",
-        grade_level: student.grade_level ?? "",
-        school_level: student.school_level ?? "",
-        profile_picture: student.profile_picture ?? "",
-        email: student.email ?? "",
-        updated_at: new Date().toISOString(),
-    };
+  const patch = {
+    first_name: student.first_name ?? "",
+    middle_name: student.middle_name ?? "",
+    last_name: student.last_name ?? "",
+    suffix: student.suffix ?? "",
+    birthdate: student.birthdate ?? "",
+    gender: student.gender ?? "",
+    street: student.street ?? "",
+    brgy: student.brgy ?? "",
+    city: student.city ?? "",
+    province: student.province ?? "",
+    username: student.username ?? "",
+    password: student.password ?? "",
+    user_level: student.user_level ?? "",
+    user_status: student.user_status ?? "",
+    program: student.program ?? "",
+    strand: student.strand ?? "",
+    grade_level: student.grade_level ?? "",
+    school_level: student.school_level ?? "",
+    profile_picture: student.profile_picture ?? "",
+    email: student.email ?? "",
+    updated_at: new Date().toISOString(),
+  };
 
-    const { data, error } = await supabase
-        .from(USERS_TABLE)
-        .update(patch)
-        .eq("supabase_id", student.supabase_id)
-        .select()
-        .single();
+  const { data, error } = await supabase
+    .from(USERS_TABLE)
+    .update(patch)
+    .eq("supabase_id", student.supabase_id)
+    .select()
+    .single();
 
-    if (error) {
-        console.error("Error updating student:", error);
-        return { success: false, error: error.message || error };
-    }
+  if (error) {
+    console.error("Error updating student:", error);
+    return { success: false, error: error.message || String(error) };
+  }
 
-    return { success: true, data };
+  return { success: true, data };
 };
 
 // DISABLE / ENABLE A USER ACCOUNT (by supabase_id)
 export const setUserDisabled = async ({ supabase_id, is_disabled }) => {
-    const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
-    if (!supabase_id || typeof is_disabled !== "boolean") {
-        return { success: false, error: "supabase_id and boolean is_disabled are required" };
-    }
+  if (!supabase_id || typeof is_disabled !== "boolean") {
+    return { success: false, error: "supabase_id and boolean is_disabled are required" };
+  }
 
-    const { data, error } = await supabase
-        .from(USERS_TABLE)
-        .update({ is_disabled, updated_at: new Date().toISOString() })
-        .eq("supabase_id", supabase_id)
-        .select("supabase_id, is_disabled")
-        .single();
+  const { data, error } = await supabase
+    .from(USERS_TABLE)
+    .update({ is_disabled, updated_at: new Date().toISOString() })
+    .eq("supabase_id", supabase_id)
+    .select("supabase_id, is_disabled")
+    .single();
 
-    if (error) {
-        console.error("setUserDisabled error:", error);
-        return { success: false, error: error.message || error };
-    }
+  if (error) {
+    console.error("setUserDisabled error:", error);
+    return { success: false, error: error.message || String(error) };
+  }
 
-    return { success: true, data };
-    };
+  return { success: true, data };
+};
 
-    // DELETE A USER (by supabase_id)
-    export const deleteStudent = async ({ supabase_id }) => {
-    const supabase = await createSupabaseServerClient();
+// DELETE A USER (by supabase_id)
+export const deleteStudent = async ({ supabase_id }) => {
+  const supabase = createSupabaseAdminClient();
 
-    if (!supabase_id) {
-        return { success: false, error: "supabase_id is required for delete" };
-    }
+  if (!supabase_id) {
+    return { success: false, error: "supabase_id is required for delete" };
+  }
 
-    const { error } = await supabase
-        .from(USERS_TABLE)
-        .delete()
-        .eq("supabase_id", supabase_id);
+  const { error } = await supabase.from(USERS_TABLE).delete().eq("supabase_id", supabase_id);
 
-    if (error) {
-        console.error("Error deleting student:", error);
-        return { success: false, error: error.message || error };
-    }
+  if (error) {
+    console.error("Error deleting student:", error);
+    return { success: false, error: error.message || String(error) };
+  }
 
-    return { success: true };
+  return { success: true };
 };
 
 /* ------------------------------------------------------------------
@@ -145,7 +170,7 @@ function normalizeAdminStatus(s) {
 }
 
 export const getAllAdmins = async () => {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   const { data, error } = await supabase
     .from(ADMINS_TABLE)
@@ -161,7 +186,7 @@ export const getAllAdmins = async () => {
 };
 
 export async function checkUsername(username) {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   const { count, error } = await supabase
     .from(ADMINS_TABLE)
@@ -178,7 +203,7 @@ export async function checkUsername(username) {
 
 // ADD A NEW ADMIN
 export const addAdmin = async (adminData) => {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   const email = String(adminData?.email || "").trim();
   const username = String(adminData?.username || "").trim();
@@ -196,7 +221,7 @@ export const addAdmin = async (adminData) => {
 
   if (dupErr) {
     console.error("dup check error:", dupErr);
-    return { success: false, error: dupErr.message || dupErr };
+    return { success: false, error: dupErr.message || String(dupErr) };
   }
   if (dup && dup.length) {
     return { success: false, error: "Email or username already exists" };
@@ -221,18 +246,16 @@ export const addAdmin = async (adminData) => {
     section: adminData.section || "",
     is_adviser: !!adminData.is_adviser,
     adviser_section: adminData.is_adviser ? (adminData.adviser_section || "") : null,
-
-    // ✅ normalize here
     admin_status: normalizeAdminStatus(adminData.admin_status),
-
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
   const { error } = await supabase.from(ADMINS_TABLE).insert(newAdmin);
+
   if (error) {
     console.error("Error adding admin:", error);
-    return { success: false, error: error.message || error };
+    return { success: false, error: error.message || String(error) };
   }
 
   return { success: true, admin_id };
@@ -240,7 +263,7 @@ export const addAdmin = async (adminData) => {
 
 // UPDATE AN ADMIN
 export const updateAdmin = async (adminData) => {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   const admin_id = String(adminData?.admin_id || "").trim();
   if (!admin_id) {
@@ -260,10 +283,7 @@ export const updateAdmin = async (adminData) => {
     section: adminData.section || "",
     is_adviser: !!adminData.is_adviser,
     adviser_section: adminData.is_adviser ? (adminData.adviser_section || "") : null,
-
-    // ✅ normalize here
     admin_status: normalizeAdminStatus(adminData.admin_status),
-
     updated_at: new Date().toISOString(),
   };
 
@@ -276,7 +296,7 @@ export const updateAdmin = async (adminData) => {
 
   if (error) {
     console.error("Error updating admin:", error);
-    return { success: false, error: error.message || error };
+    return { success: false, error: error.message || String(error) };
   }
 
   return { success: true, data };
@@ -284,7 +304,7 @@ export const updateAdmin = async (adminData) => {
 
 // DELETE AN ADMIN
 export const deleteAdmin = async ({ admin_id }) => {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   const id = String(admin_id || "").trim();
   if (!id) {
@@ -295,7 +315,7 @@ export const deleteAdmin = async ({ admin_id }) => {
 
   if (error) {
     console.error("Error deleting admin:", error);
-    return { success: false, error: error.message || error };
+    return { success: false, error: error.message || String(error) };
   }
 
   return { success: true };
@@ -303,7 +323,7 @@ export const deleteAdmin = async ({ admin_id }) => {
 
 /* ----------------------- PASSWORD MANAGEMENT ------------------------ */
 export const updateAdminPassword = async ({ target_admin_id, new_password }) => {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   const id = String(target_admin_id || "").trim();
   const pw = String(new_password || "");
@@ -321,7 +341,7 @@ export const updateAdminPassword = async ({ target_admin_id, new_password }) => 
 
   if (error) {
     console.error("updateAdminPassword error:", error);
-    return { success: false, error: error.message || error };
+    return { success: false, error: error.message || String(error) };
   }
 
   return { success: true, data };
@@ -332,11 +352,11 @@ export const updateAdminPassword = async ({ target_admin_id, new_password }) => 
 ------------------------------------------------------------------ */
 
 export const loginAdmin = async (login, password) => {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
   const cleanLogin = String(login || "").trim();
 
   const { data, error } = await supabase
-    .from(ADMINS_TABLE) // ✅ use constant
+    .from(ADMINS_TABLE)
     .select("*")
     .or(`email.eq.${cleanLogin},username.eq.${cleanLogin}`)
     .limit(1)
@@ -352,6 +372,7 @@ export const loginAdmin = async (login, password) => {
   const status = String(data.admin_status || "").trim().toLowerCase();
   if (status !== "active") return { success: false, error: "Account is inactive." };
 
+  // ⚠️ Plain text check (your current system)
   if (String(data.password ?? "") !== String(password ?? "")) {
     return { success: false, error: "Invalid password." };
   }
