@@ -1,9 +1,11 @@
 // app/services/subjects.server.js
+import "server-only";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   throw new Error(
@@ -11,12 +13,15 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   );
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false },
+});
 
 const TABLE = "subjects";
 const TRACKS_TABLE = "tracks";
 
 const toStr = (v) => String(v ?? "").trim();
+
 const emptyToNull = (v) => {
   const s = toStr(v);
   return s ? s : null;
@@ -25,6 +30,9 @@ const emptyToNull = (v) => {
 const normalizeStatus = (v) => {
   const s = String(v ?? "").trim().toLowerCase();
   if (s === "inactive") return "Inactive";
+  if (s === "active") return "Active";
+  // If they already pass "Active"/"Inactive", keep it
+  if (v === "Inactive") return "Inactive";
   return "Active";
 };
 
@@ -33,20 +41,20 @@ const parseCategoryFilter = (category) => {
   const raw = toStr(category);
   if (!raw) return null;
 
-  // Accept "A|B|C" (your UI builds this for "All electives" under a group)
   const parts = raw
     .split("|")
     .map((x) => x.trim())
     .filter(Boolean);
 
-  if (parts.length <= 1) return { mode: "eq", values: parts.length ? parts[0] : raw };
+  if (parts.length <= 1)
+    return { mode: "eq", values: parts.length ? parts[0] : raw };
   return { mode: "in", values: parts };
 };
 
 /**
  * Schema (current):
  * subjects.subject_id TEXT PRIMARY KEY
- * subjects.track_id TEXT (FK -> tracks.track_id)   ✅
+ * subjects.track_id TEXT (FK -> tracks.track_id)
  * subjects.subject_description TEXT
  *
  * NOTE:
@@ -117,9 +125,11 @@ export async function getSubjects({
 } = {}) {
   const q = toStr(search);
   const track = toStr(track_id);
-  const st = toStr(status);
 
-  // ✅ category can be "Core" or "A|B|C"
+  // ✅ normalize status filter to match DB values ("Active"/"Inactive")
+  const stRaw = toStr(status);
+  const st = stRaw ? normalizeStatus(stRaw) : "";
+
   const catFilter = parseCategoryFilter(category);
 
   const p = Math.max(1, Number(page) || 1);
@@ -130,18 +140,9 @@ export async function getSubjects({
   const SELECT_BASE =
     "subject_id, subject_name, track_id, subject_category, subject_status, subject_description, created_at, updated_at";
 
-  // ✅ IMPORTANT:
-  // If your FK is defined, the most reliable join is:
-  //   tracks:tracks!subjects_track_id_fkey(...)
-  // But we don't know your constraint name.
-  //
-  // We'll try the simple FK-based join first (tracks(*)) and fallback if it errors.
-  // If your join keeps failing, tell me your FK constraint name and I'll hardcode it.
   const SELECT_WITH_TRACK_TRY_1 =
     "subject_id, subject_name, track_id, subject_category, subject_status, subject_description, created_at, updated_at, tracks:tracks(track_id, track_name, summary, badge_color, gradient_start, gradient_end)";
 
-  // Your previous join string `tracks:track_id(...)` is NOT a valid relationship name in PostgREST,
-  // so it often breaks. (It only works if you literally have a relationship called "track_id".)
   const SELECT_WITH_TRACK_TRY_2 =
     "subject_id, subject_name, track_id, subject_category, subject_status, subject_description, created_at, updated_at, tracks(track_id, track_name, summary, badge_color, gradient_start, gradient_end)";
 
@@ -151,7 +152,6 @@ export async function getSubjects({
     if (track) query = query.eq("track_id", track);
     if (st) query = query.eq("subject_status", st);
 
-    // ✅ FIXED: category filter supports groups (A|B|C)
     if (catFilter) {
       if (catFilter.mode === "in") {
         query = query.in("subject_category", catFilter.values);
@@ -207,13 +207,13 @@ export async function getSubjects({
   }
 
   if (includeTrack) {
-    // ✅ Try joining in a more correct way; fallback to manual fetch
     try {
       return await run(SELECT_WITH_TRACK_TRY_1);
     } catch {
       try {
         return await run(SELECT_WITH_TRACK_TRY_2);
       } catch {
+        // Fallback: fetch tracks manually
         const res = await run(SELECT_BASE);
         const subjects = res.subjects;
 
@@ -258,11 +258,14 @@ export async function getSubjectById(subject_id, { includeTrack = false } = {}) 
   let error = null;
 
   if (!includeTrack) {
-    const res = await supabase.from(TABLE).select(selectBase).eq("subject_id", id).maybeSingle();
+    const res = await supabase
+      .from(TABLE)
+      .select(selectBase)
+      .eq("subject_id", id)
+      .maybeSingle();
     data = res.data;
     error = res.error;
   } else {
-    // try join, fallback
     const a = await supabase
       .from(TABLE)
       .select(selectWithTrackTry1)
@@ -289,7 +292,6 @@ export async function getSubjectById(subject_id, { includeTrack = false } = {}) 
 
   if (!includeTrack) return data;
 
-  // Ensure tracks exists
   if (!("tracks" in data) || (data.tracks == null && data?.track_id)) {
     data.tracks = await fetchTrackByUnknownKey(data.track_id);
   }
@@ -304,8 +306,10 @@ export async function createSubject(payload) {
     const subject_id = toStr(incoming.subject_id);
     const subject_name = toStr(incoming.subject_name);
 
-    if (!subject_id) return { success: false, error: "Subject Code (subject_id) is required." };
-    if (!subject_name) return { success: false, error: "Subject Name is required." };
+    if (!subject_id)
+      return { success: false, error: "Subject Code (subject_id) is required." };
+    if (!subject_name)
+      return { success: false, error: "Subject Name is required." };
 
     const insertData = pickAllowed(incoming);
 
@@ -324,7 +328,11 @@ export async function createSubject(payload) {
 
     insertData.subject_status = normalizeStatus(insertData.subject_status);
 
-    const { data, error } = await supabase.from(TABLE).insert([insertData]).select().single();
+    const { data, error } = await supabase
+      .from(TABLE)
+      .insert([insertData])
+      .select()
+      .single();
 
     if (error) return { success: false, error: error.message };
     return { success: true, subject: data };
