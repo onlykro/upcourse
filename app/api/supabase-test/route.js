@@ -1,4 +1,3 @@
-// app/api/supabase-test/route.js
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
